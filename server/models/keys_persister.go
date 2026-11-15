@@ -2,10 +2,13 @@ package models
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/meshery/meshkit/database"
 	"github.com/meshery/schemas/models/core"
+	"gorm.io/gorm"
 )
 
 // KeyPersister is the persister for persisting keys in the database
@@ -15,6 +18,10 @@ type KeyPersister struct {
 
 // GetUsersKeys returns all keys based on search, order, and updatedAfter without pagination
 func (kp *KeyPersister) GetUsersKeys(search, order, updatedAfter string) ([]byte, error) {
+	if kp == nil || kp.DB == nil {
+		return nil, ErrDBConnection
+	}
+
 	order = SanitizeOrderInput(order, []string{"created_at", "updated_at", "function", "category", "subcategory"})
 
 	if order == "" {
@@ -31,7 +38,13 @@ func (kp *KeyPersister) GetUsersKeys(search, order, updatedAfter string) ([]byte
 		query = query.Where("(lower(keys.function) like ? OR lower(keys.category) like ? OR lower(keys.subcategory) like ?)", like, like, like)
 	}
 
-	query.Table("keys").Count(&count).Find(&keys)
+	if err := query.Table("keys").Count(&count).Error; err != nil {
+		return nil, ErrDBRead(err)
+	}
+
+	if err := query.Table("keys").Find(&keys).Error; err != nil {
+		return nil, ErrDBRead(err)
+	}
 
 	keysPage := &KeysPage{
 		Page:       1,          // Assuming default page to be 1
@@ -45,6 +58,13 @@ func (kp *KeyPersister) GetUsersKeys(search, order, updatedAfter string) ([]byte
 
 // SaveUsersKey saves a key to the database
 func (kp *KeyPersister) SaveUsersKey(key *Key) (*Key, error) {
+	if kp == nil || kp.DB == nil {
+		return nil, ErrDBConnection
+	}
+	if key == nil {
+		return nil, ErrDBCreate(fmt.Errorf("key cannot be nil"))
+	}
+
 	if err := kp.DB.Save(key).Error; err != nil {
 		return nil, ErrDBCreate(err)
 	}
@@ -54,6 +74,10 @@ func (kp *KeyPersister) SaveUsersKey(key *Key) (*Key, error) {
 
 // SaveUsersKeys saves multiple keys to the database
 func (kp *KeyPersister) SaveUsersKeys(keys []Key) ([]Key, error) {
+	if kp == nil || kp.DB == nil {
+		return nil, ErrDBConnection
+	}
+
 	if err := kp.DB.Save(&keys).Error; err != nil {
 		return nil, ErrDBCreate(err)
 	}
@@ -63,9 +87,20 @@ func (kp *KeyPersister) SaveUsersKeys(keys []Key) ([]Key, error) {
 
 // GetUsersKey retrieves a key by its ID
 func (kp *KeyPersister) GetUsersKey(id core.Uuid) ([]byte, error) {
+	if kp == nil || kp.DB == nil {
+		return nil, ErrDBConnection
+	}
+
 	var key Key
 	err := kp.DB.First(&key, id).Error
-	return marshalKey(&key), err
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrResultNotFound(err)
+		}
+		return nil, ErrDBRead(err)
+	}
+
+	return marshalKey(&key), nil
 }
 
 func marshalKey(k *Key) []byte {
